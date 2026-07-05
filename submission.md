@@ -202,3 +202,24 @@ songs and then retrieves its ordered song list. The assertion failed because
 the service returned only four songs, with `Track 4` as the final returned
 entry. This confirmed that the fifth and final song was omitted before I
 changed any service code.
+
+**How I found the root cause:** I traced
+`GET /playlists/<playlist_id>/songs` from `routes/playlists.py` to
+`get_playlist_songs()` in `services/playlist_service.py`. The database query
+joined songs to `playlist_entries`, filtered by playlist ID, ordered the rows
+by position, and returned the complete result with `.all()`. The data was
+therefore complete until the return statement applied `songs[:-1]`. AI helped
+me interpret the negative slice syntax, and I verified that this was the exact
+cause by comparing the five-song fixture with the four serialized results.
+
+**The root cause:** In Python, `songs[:-1]` creates a slice from the start of
+the list up to—but not including—the element at index `-1`, which is the final
+element. The query retrieved every playlist song in the correct order, but the
+serialization loop deliberately iterated over that shortened slice. As a
+result, every nonempty playlist response omitted exactly its last song.
+
+**My fix and side-effect check:** I changed the return expression to iterate
+over `songs` directly, preserving every row returned by the ordered query. All
+three playlist tests then passed: a five-song playlist returned all five,
+their position order remained correct, and an empty playlist still returned an
+empty list. I also ran the complete test suite, which passed all 13 tests.
