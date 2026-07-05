@@ -16,7 +16,9 @@
   order and checked every part of the trace against the actual function calls
   before accepting it. I also did not assume every reported bug would reproduce:
   the Issue #3 duplicate-search test passed in my environment, so I selected
-  the reproducible feed issue instead.
+  the reproducible feed issue for my required three fixes. When I returned to
+  Issue #3 as a stretch fix, I inspected the raw joined rows and documented
+  that my SQLAlchemy version masked the duplicates at the service boundary.
 
 **Instance 2: Checking the streak and feed corrections**
 
@@ -245,6 +247,42 @@ at 30 minutes old and Aaliya at 23 hours old. The service returned Nova and
 excluded Aaliya, confirming both sides of the new cutoff. The full test suite
 produced 11 passes and only the two previously reproduced Issue #5 playlist
 failures, so the feed change introduced no additional test failures.
+
+### Issue #3: The same song keeps showing up twice in search
+
+**How I reproduced it:** I reseeded the database and searched for `Crown
+Heights` in Flask shell. The matching song has three tags. In my installed
+SQLAlchemy version, `search_songs()` returned one serialized song because an
+entity-only `Query` de-duplicated rows with the same primary key. I then ran
+the same outer join while projecting the song ID, title, and tag ID. That raw
+query returned three rows with the same song ID and three different tag IDs.
+This reproduced the underlying duplicate-row condition while also showing
+that SQLAlchemy 2.0 masked the reported duplicate API output in my environment.
+
+**How I found the root cause:** I traced `GET /songs/search` from
+`routes/songs.py` to `search_songs()` in `services/search_service.py`, then
+followed its query into the `song_tags` association table in `models.py` and
+the multi-tag fixture in `seed_data.py`. Searching title and artist with `OR`
+does not duplicate a row; the important step was the outer join. Seeing the
+same song ID three times in the raw result, with only `tag_id` changing, made
+me confident that join multiplicity was the cause. AI helped distinguish SQL
+rows from ORM entity results, and I verified the explanation using both query
+forms and the focused regression test.
+
+**The root cause:** `search_songs()` outer-joined `Song` to `song_tags` without
+requesting distinct songs. A song contributes one joined row for each matching
+association-table row, so a song with three tags produces three SQL rows.
+Single-tag and untagged songs do not expose the same multiplicity. The legacy
+entity-query behavior in my SQLAlchemy version collapsed identical `Song`
+primary keys before serialization, but the SQL query itself did not guarantee
+unique songs and other result-handling paths can expose those duplicates.
+
+**My fix and side-effect check:** I added `.distinct()` before `.all()` so the
+database query explicitly returns unique `Song` rows instead of relying on ORM
+identity de-duplication. I ran all five search tests, covering ordinary title
+or artist matches, untagged songs, single-tag songs, multi-tag songs, and empty
+results; all five passed, and the multi-tag result still contained all three
+tag names. I then ran the complete suite and all 13 tests passed.
 
 ### Issue #5: The last song in a playlist never shows up
 
