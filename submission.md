@@ -1,5 +1,58 @@
 # Mixtape Bug Hunt Submission
 
+## AI Usage
+
+**Instance 1: Codebase orientation**
+
+- *What I gave the AI:* I gave Codex the project brief, README, models, routes,
+  services, seed script, and tests. I asked it to summarize what the main files
+  were responsible for and trace a real feature from its route through the
+  service and database models.
+- *What it produced:* Codex helped organize the codebase map and traced the
+  song-listen flow from `POST /songs/<song_id>/listen` through
+  `record_listening_event()` and `update_listening_streak()`, then into the
+  feed queries that later read the saved event.
+- *What I changed or verified:* I read the files in the README's recommended
+  order and checked every part of the trace against the actual function calls
+  before accepting it. I also did not assume every reported bug would reproduce:
+  the Issue #3 duplicate-search test passed in my environment, so I selected
+  the reproducible feed issue instead.
+
+**Instance 2: Checking the streak and feed corrections**
+
+- *What I gave the AI:* I shared the failing Sunday test, the streak condition,
+  the feed threshold, and the terminal output from my reproduction steps. I
+  asked Codex to explain the relevant date logic, check whether the proposed
+  one-line corrections matched the reported behavior, and suggest side-effect
+  checks.
+- *What it produced:* Codex explained that `weekday()` returns `6` on Sunday
+  and that the existing condition excluded Sunday even when the last listen was
+  exactly one day earlier. It also explained how the 24-hour
+  `RECENT_THRESHOLD` allowed previous-day activity into "Listening Now" and
+  suggested controlled events on both sides of a one-hour cutoff.
+- *What I changed or verified:* I accepted the minimal streak correction only
+  after the focused tests passed and a live API check changed Darius's Sunday
+  streak from 3 to 4 instead of resetting it. For the feed fix, I changed the
+  threshold myself and used Flask shell to confirm that a 30-minute-old event
+  appeared while a 23-hour-old event did not. I then ran the full suite to make
+  sure neither correction introduced new failures.
+
+**Instance 3: Explaining and checking the playlist fix**
+
+- *What I gave the AI:* I showed Codex the failing five-song playlist test and
+  asked whether `songs[:-1]` on the return line explained why only four songs
+  were returned.
+- *What it produced:* Codex explained Python's negative slice syntax: `[:-1]`
+  starts at the beginning but stops before the final list element. It confirmed
+  that the query itself returned the complete ordered list and that the slice
+  removed the last song during serialization.
+- *What I changed or verified:* I changed the return expression to iterate over
+  `songs` directly. I verified the correction with all three playlist tests,
+  including order preservation and the empty-playlist case, and then ran the
+  full suite successfully. Codex also helped organize the RCA wording, which I
+  checked against the code, reproduction output, and test results before using
+  it.
+
 ## Milestone 1: Codebase Map
 
 ### Application structure
@@ -96,7 +149,7 @@
 ### Setup and orientation checkpoint
 
 - Working branch: `bugfix/mixtape`
-- Environment: project-local Windows `.venv`, Python 3.12.13
+- Environment: project-local WSL `.venv`, Python 3.12.3
 - Seed command: completed successfully
 - Flask app-factory launch: confirmed HTTP 200 at `http://127.0.0.1:5000`
 - Baseline tests: 10 passed and 3 failed before any fixes
@@ -117,7 +170,7 @@ should not appear in "Friends Listening Now." I am not selecting Issue #3
 initially because its supplied duplicate-search regression test passes in this
 environment, so its reported behavior is not yet reproducible.
 
-## Milestone 2: Bug Reproduction
+## Milestones 2 and 3: Bug Reproduction and Root Cause Analysis
 
 ### Issue #1: My listening streak keeps resetting
 
