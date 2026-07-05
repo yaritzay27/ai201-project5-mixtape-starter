@@ -55,6 +55,21 @@
   checked against the code, reproduction output, and test results before using
   it.
 
+**Instance 4: Implementing the final notification fix**
+
+- *What I gave the AI:* For the final stretch bug, I asked Codex to handle the
+  implementation. I provided the issue description and the repository context,
+  including the working playlist notification and the rating workflow that did
+  not notify the song sharer.
+- *What it produced:* Codex compared the two paths, wrote a focused regression
+  test that failed before the fix, added the missing rating notification call,
+  and added a self-rating test to protect against notifying users about their
+  own actions.
+- *What I changed or verified:* I required the bug to be reproduced before the
+  service was changed. The new test first failed with zero notifications, then
+  both notification tests passed after the fix. The final full suite passed all
+  15 tests, including a check that saving the rating still worked.
+
 ## Milestone 1: Codebase Map
 
 ### Application structure
@@ -283,6 +298,45 @@ identity de-duplication. I ran all five search tests, covering ordinary title
 or artist matches, untagged songs, single-tag songs, multi-tag songs, and empty
 results; all five passed, and the multi-tag result still contained all three
 tag names. I then ran the complete suite and all 13 tests passed.
+
+### Issue #4: Ratings do not notify the song sharer
+
+**How I reproduced it:** I created `tests/test_notifications.py` with a
+focused regression test using an original song sharer, a different user acting
+as the rater, and one shared song. The test called `rate_song()` with a score
+of 4 and then queried notifications for the original sharer. Before the fix,
+the rating was saved but the query returned an empty list, so the assertion
+expecting one notification failed with `0 == 1`. A separate self-rating
+control returned no notifications, which established the behavior that needed
+to remain unchanged.
+
+**How I found the root cause:** I traced
+`POST /songs/<song_id>/rate` from `routes/songs.py` to `rate_song()` in
+`services/notification_service.py`. I then compared that function line by line
+with the working `add_to_playlist()` path in the same module.
+`add_to_playlist()` saves its action and calls `create_notification()` for the
+song's original sharer, while `rate_song()` validated and saved the rating,
+committed, and immediately returned. The absent call after the successful
+commit, confirmed by the failing regression test, identified the specific
+architectural gap.
+
+**The root cause:** Rating persistence and notification creation are separate
+operations. `rate_song()` created or updated the `Rating` row, but no code
+invoked `create_notification()` afterward. Because notification creation is
+not an automatic SQLAlchemy model hook, successfully committing a rating
+cannot create a `Notification` by itself. The playlist workflow worked because
+it explicitly performed that second operation; the rating workflow omitted
+it entirely.
+
+**My fix and side-effect check:** After committing the rating, I added a call
+to `create_notification()` with the original sharer as recipient, the
+`song_rated` type, and a message containing the rater, song title, and score.
+The call is guarded by `song.shared_by != user_id` so users are not notified
+when rating their own songs. The focused tests confirmed that a friend's
+rating remained saved and created exactly one notification, while a
+self-rating created none. The complete suite then passed all 15 tests, so the
+new notification behavior did not regress streaks, feeds, search, playlists,
+or existing notification behavior.
 
 ### Issue #5: The last song in a playlist never shows up
 
