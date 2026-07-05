@@ -166,6 +166,33 @@ timestamp `2026-07-04T22:56:47.241286` even though the check was performed on
 July 5. This confirmed that activity from the previous day was incorrectly
 included in "Friends Listening Now" before I changed any service code.
 
+**How I found the root cause:** I traced
+`GET /feed/<user_id>/listening-now` from `routes/feed.py` to
+`get_friends_listening_now()` in `services/feed_service.py`. Inside that
+function, I followed the value of `RECENT_THRESHOLD` into the calculated
+`cutoff`, then into the database filter on `ListeningEvent.listened_at`. The
+controlled 23-hour-old event satisfied that filter, which confirmed that the
+cutoff itself—not friendship lookup, ordering, or friend deduplication—was the
+specific cause. AI helped me trace the request and design controlled events on
+both sides of the cutoff; I verified the conclusion through Flask shell and
+the returned timestamps.
+
+**The root cause:** `RECENT_THRESHOLD` was defined as 24 hours, so the query
+accepted every friend event whose timestamp was at least
+`datetime.now(timezone.utc) - timedelta(hours=24)`. That range is an activity
+history window rather than a "listening now" window and can include events from
+the previous calendar day. The seed data identifies events within 30 minutes
+as recent and events beginning at two hours old as stale, leaving a one-hour
+boundary between the two groups.
+
+**My fix and side-effect check:** I changed `RECENT_THRESHOLD` from 24 hours to
+1 hour without changing the activity-feed query, ordering, or per-friend
+deduplication. I then created two controlled events for Kenji's friends: Nova
+at 30 minutes old and Aaliya at 23 hours old. The service returned Nova and
+excluded Aaliya, confirming both sides of the new cutoff. The full test suite
+produced 11 passes and only the two previously reproduced Issue #5 playlist
+failures, so the feed change introduced no additional test failures.
+
 ### Issue #5: The last song in a playlist never shows up
 
 **How I reproduced it:** After restoring the seed data, I ran the focused test
